@@ -2,6 +2,7 @@
 import logging
 import ev3dev.ev3 as ev3
 import common
+import operator
 
 
 class Robot:
@@ -10,6 +11,10 @@ class Robot:
     """
 
     DEFAULT_SPEED = 100
+    MIN_ROTATION_SPEED = 5
+    ROTATION_EXPONENTIAL_SLOWDOWN_ANGLE_PERCENTAGE = 2 / 3
+    ROTATION_EXPONENTIAL_SLOWDOWN_RIGHT_SPEED_PERCENTAGE = 0.5
+    ROTATION_EXPONENTIAL_SLOWDOWN_LEFT_SPEED_PERCENTAGE = 0.5
 
     MAX_DIST = 5000
     MIN_DIST = 0
@@ -91,15 +96,8 @@ class Robot:
         """
         self.right_motor.speed_sp = -round(self.speed / 2)
         self.left_motor.speed_sp = round(self.speed / 2)
-        self.right_motor.run_forever()
-        self.left_motor.run_forever()
-        moveto = self.gyro_sensor.value() + angle
 
-        while self.gyro_sensor.value() < moveto:
-            # todo check interrupt
-            pass
-
-        self.stop()
+        self._exponential_slowdown_rotation(angle, operator.lt, operator.plus)
 
     @common.check_int
     @common.max(MAX_ANGLE)
@@ -112,14 +110,30 @@ class Robot:
         """
         self.right_motor.speed_sp = round(self.speed / 2)
         self.left_motor.speed_sp = -round(self.speed / 2)
+
+        self._rotation_with_exponential_slowdown(angle, operator.gt, operator.sub)
+
+    def _rotation_with_exponential_slowdown(self, angle, comperator, arithmetic_op):
+        """
+        Performs an exponential slow-down during a rotation of the robot.
+        :param target_angle: the angle in degrees
+        :param comparator: custom comparator to check the target_angle vs. the current angle (i.e. the direction of the rotation)
+        :param arithmetic_op: custom arithmetic operator between the current_angle and the target_angle based on the direction of the rotation
+        :return: None
+        """
         self.right_motor.run_forever()
         self.left_motor.run_forever()
-        moveto = self.gyro_sensor.value() - angle
-
-        while self.gyro_sensor.value() > moveto:
-            # todo check interrupt
-            pass
-
+        target_angle = arithmetic_op(self.gyro_sensor.value(), angle)
+        while comperator(self.gyro_sensor.value(), target_angle):
+            if min(abs(self.right_motor.speed_sp), abs(self.left_motor.speed_sp)) > self.MIN_ROTATION_SPEED:
+                # use negative values to invert the arithmetic_op
+                # ((-a) + (-b) = - (a + b)
+                partial_target = -(arithmetic_op(-self.gyro_sensor.value(), -target_angle)) * self.ROTATION_EXPONENTIAL_SLOWDOWN_ANGLE_PERCENTAGE
+                while comperator(self.gyro_sensor.value(), partial_target):
+                    pass
+                # TODO: it might be necessary to stop the motor here (?)
+                self.right_motor.speed_sp *= self.ROTATION_EXPONENTIAL_SLOWDOWN_RIGHT_SPEED_PERCENTAGE
+                self.left_motor.speed_sp *= self.ROTATION_EXPONENTIAL_SLOWDOWN_LEFT_SPEED_PERCENTAGE
         self.stop()
 
     def stop(self):
